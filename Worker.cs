@@ -3,6 +3,7 @@ using TaskManagerTelegramBot_Pikulev.Classes;
 using Telegram.Bot.Types.ReplyMarkups;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types;
+using Telegram.Bot.Polling;
 
 namespace TaskManagerTelegramBot_Pikulev
 {
@@ -146,6 +147,79 @@ namespace TaskManagerTelegramBot_Pikulev
                     Time,
                     message.Text.Replace(Time.ToString("HH:mm dd.MM.yyyy") + "\n", "")));
             }
+        }
+        private async Task HandleUpdateAsync(
+            ITelegramBotClient client,
+            Update update,
+            CancellationToken cancellationToken)
+        {
+            if (update.Type == UpdateType.Message)
+                GetMessages(update.Message);
+            else if (update.Type == UpdateType.CallbackQuery)
+            {
+                CallbackQuery query = update.CallbackQuery;
+                Users User = Users.Find(x => x.IdUser == query.Message.Chat.Id);
+                Events Event = User.Events.Find(x => x.Message == query.Data);
+                User.Events.Remove(Event);
+                SendMessage(query.Message.Chat.Id, 5);
+            }
+        }
+        private async Task HandleErrorAsync(
+            ITelegramBotClient client,
+            Exception exception,
+            HandleErrorSource source,
+            CancellationToken token)
+        {
+            Console.WriteLine("Ошибка: " + exception.Message);
+            await Task.CompletedTask;
+        }
+        public async void Tick(object obj)
+        {
+            DateTime currentDate = DateTime.Now;
+            string TimeNow = currentDate.ToString("HH:mm");
+            DayOfWeek currentDay = currentDate.DayOfWeek;
+
+            foreach (Users User in Users)
+            {
+                for (int i = User.Events.Count; i++)
+                {
+                    Events currentEvent = User.Events[i];
+
+                    if (currentEvent.IsRecurring)
+                    {
+                        if (currentEvent.RecurringDays.Contains(currentDay) &&
+                            currentEvent.Time.ToString("HH:mm") == TimeNow)
+                        {
+                            await TelegramBotClient.SendMessage(User.IdUser,
+                                $"🔁 Напоминание (повторяющееся): {currentEvent.Message}\n" +
+                                $"📅 Следующее напоминание: {GetNextOccurrence(currentEvent, currentDate):HH:mm dd.MM.yyyy}");
+                        }
+                    }
+                    else
+                    {
+                        if (currentEvent.Time.ToString("HH:mm dd.MM.yyyy") == currentDate.ToString("HH:mm dd.MM.yyyy"))
+                        {
+                            await TelegramBotClient.SendMessage(User.IdUser,
+                                "📅 Напоминание: " + currentEvent.Message);
+                            User.Events.RemoveAt(i);
+                        }
+                    }
+                }
+            }
+        }
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+
+            TelegramBotClient = new TelegramBotClient(Token);
+            TelegramBotClient.StartReceiving(
+                HandleUpdateAsync,
+                HandleErrorAsync,
+                null,
+                new CancellationTokenSource().Token);
+            TimerCallback timerCallback = new TimerCallback(Tick);
+            Timer = new Timer(timerCallback, 0, 0, 60 * 1000);
+
+            await Task.CompletedTask;
         }
         private readonly ILogger<Worker> _logger;
 
