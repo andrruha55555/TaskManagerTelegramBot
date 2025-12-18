@@ -297,6 +297,7 @@ namespace TaskManagerTelegramBot_Pikulev
                 {
                     Events currentEvent = User.Events[i];
 
+
                     if (currentEvent.IsRecurring)
                     {
                         if (currentEvent.RecurringDays.Contains(currentDay) &&
