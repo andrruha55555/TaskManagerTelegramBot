@@ -9,7 +9,7 @@ namespace TaskManagerTelegramBot_Pikulev
 {
     public class Worker : BackgroundService
     {
-        readonly string Token = "8597751564:AAHZmAMcwdV-2FzwipaOGm_ymxXvcUBkNgs";
+        readonly string Token = "7947738335:AAHipmScN5ZlaCgCs9maWV0y0p3-QOuKgzY";
         TelegramBotClient TelegramBotClient;
         List<Users> Users = new List<Users>();
         Timer Timer;
