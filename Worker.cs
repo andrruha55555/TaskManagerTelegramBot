@@ -24,21 +24,79 @@ namespace TaskManagerTelegramBot_Pikulev
             "Укажите дату и время напоминания в следующем формате:" +
             "\n<i><b>12:51 26.04.2025</b>" +
             "\nНапомни о том что я хотел сходить в магазин.</i>" +
+            "\n\nДля повторяющихся задач используйте:" +
+            "\n<i><b>* 21:00 ср,вс</b>" +
+            "\nПолить цветы.</i>" +
+            "\n\nПоддерживаются дни: пн, вт, ср, чт, пт, сб, вс",
 
             "Кажется, что-то не получилось." +
             "Укажите дату и время напоминания в следующем формате:" +
             "\n<i><b>12:51 26.04.2025</b>" +
             "\nНапомни о том что я хотел сходить в магазин.</i>" +
-            " ",
+            "\n\nИли для повторяющихся задач:" +
+            "\n<i><b>* 21:00 ср,вс</b>" +
+            "\nЗадача.</i>",
 
             "Задачи пользователя не найдены.",
             "Событие удалено.",
             "Все события удалены."
         };
-        public bool CheckFormatDateTime(string value, out DateTime date)
+        private static readonly Dictionary<string, DayOfWeek> DayOfWeekMap = new Dictionary<string, DayOfWeek>
         {
-            return DateTime.TryParse(value, out date);
+            {"пн", DayOfWeek.Monday},
+            {"вт", DayOfWeek.Tuesday},
+            {"ср", DayOfWeek.Wednesday},
+            {"чт", DayOfWeek.Thursday},
+            {"пт", DayOfWeek.Friday},
+            {"сб", DayOfWeek.Saturday},
+            {"вс", DayOfWeek.Sunday}
+        };
+
+        private static readonly Dictionary<DayOfWeek, string> DayOfWeekReverseMap = new Dictionary<DayOfWeek, string>
+        {
+            {DayOfWeek.Monday, "пн"},
+            {DayOfWeek.Tuesday, "вт"},
+            {DayOfWeek.Wednesday, "ср"},
+            {DayOfWeek.Thursday, "чт"},
+            {DayOfWeek.Friday, "пт"},
+            {DayOfWeek.Saturday, "сб"},
+            {DayOfWeek.Sunday, "вс"}
+        };
+
+        public bool CheckFormatDateTime(string value, out DateTime time)
+        {
+            return DateTime.TryParse(value, out time);
         }
+        public bool CheckRecurringTaskFormat(string value, out TimeSpan time, out List<DayOfWeek> days)
+        {
+            time = TimeSpan.Zero;
+            days = new List<DayOfWeek>();
+
+            if (!value.StartsWith("* "))
+                return false;
+
+            var parts = value.Split(' ');
+            if (parts.Length < 3)
+                return false;
+            if (!TimeSpan.TryParse(parts[1], out time))
+                return false;
+            var dayParts = parts[2].Split(',');
+            foreach (var dayStr in dayParts)
+            {
+                if (DayOfWeekMap.TryGetValue(dayStr.ToLower(), out DayOfWeek day))
+                {
+                    if (!days.Contains(day))
+                        days.Add(day);
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            return days.Count > 0;
+        }
+
         private static ReplyKeyboardMarkup GetButtons()
         {
             List<KeyboardButton> keyboardButtons = new List<KeyboardButton>();
@@ -52,8 +110,15 @@ namespace TaskManagerTelegramBot_Pikulev
             };
         }
 
+        public static InlineKeyboardMarkup DeleteEvent(string Message)
+        {
+            List<InlineKeyboardButton> inlineKeyboards = new List<InlineKeyboardButton>();
+            inlineKeyboards.Add(new InlineKeyboardButton("Удалить", Message));
 
-        public async void SendMessage(long chatId, int typeMessage)
+            return new InlineKeyboardMarkup(inlineKeyboards);
+        }
+
+        public async Task SendMessageAsync(long chatId, int typeMessage)
         {
             if (typeMessage != 3)
             {
@@ -71,52 +136,60 @@ namespace TaskManagerTelegramBot_Pikulev
                     $"потому что сейчас уже: {DateTime.Now.ToString("HH.mm dd.MM.yyyy")}");
             }
         }
-        public static InlineKeyboardMarkup DeleteEvent(string Message)
-        {
-            List<InlineKeyboardButton> inlineKeyboards = new List<InlineKeyboardButton>();
-            inlineKeyboards.Add(new InlineKeyboardButton("Удалить", Message));
 
-            return new InlineKeyboardMarkup(inlineKeyboards);
-        }
-        public async void Command(long chatId, string command)
+        public async Task CommandAsync(long chatId, string command)
         {
-            if (command.ToLower() == "/start") SendMessage(chatId, 0);
-            else if (command.ToLower() == "/create_task") SendMessage(chatId, 1);
+            if (command.ToLower() == "/start") await SendMessageAsync(chatId, 0);
+            else if (command.ToLower() == "/create_task") await SendMessageAsync(chatId, 1);
             else if (command.ToLower() == "/list_tasks")
             {
                 Users User = Users.Find(x => x.IdUser == chatId);
-                if (User == null) SendMessage(chatId, 4);
-                else if (User.Events.Count == 0) SendMessage(chatId, 4);
+                if (User == null) await SendMessageAsync(chatId, 4);
+                else if (User.Events.Count == 0) await SendMessageAsync(chatId, 4);
                 else
                 {
                     foreach (Events Event in User.Events)
                     {
+                        string eventType = Event.IsRecurring ? "🔁 Повторяющаяся: " : "📅 Одноразовая: ";
+                        string eventInfo = Event.IsRecurring ?
+                            $"Каждый {GetDaysString(Event.RecurringDays)} в {Event.Time:t}" :
+                            $"Напоминание: {Event.Time.ToString("HH:mm dd.MM.yyyy")}";
+
                         await TelegramBotClient.SendMessage(
                             chatId,
-                            $"Уведомить пользователя: {Event.Time.ToString("HH:mm dd:MM:yyyy")}"
-                            + $"\nÑîîáùåíèå: {Event.Message}",
+                            $"{eventType}{eventInfo}" +
+                            $"\nСообщение: {Event.Message}",
                             replyMarkup: DeleteEvent(Event.Message)
                             );
                     }
                 }
             }
         }
-        private void GetMessages(Message message)
+
+        private string GetDaysString(List<DayOfWeek> days)
         {
-            Console.WriteLine("Получено сообщение: " + message.Text + " от пользователя: " + message.Chat.Username);
+            return string.Join(",", days.Select(d => DayOfWeekReverseMap[d]));
+        }
+
+        private async Task GetMessagesAsync(Message message)
+        {
+            Console.WriteLine("Получаено сообщение: " + message.Text + "от пользователя: " + message.Chat.Username);
             long IdUser = message.Chat.Id;
             string MessageUser = message.Text;
 
-            if (message.Text.Contains("/")) Command(message.Chat.Id, message.Text);
+            DatabaseHelper.SaveUser(message.Chat.Id, message.Chat.Username);
+
+            if (message.Text.Contains("/")) await CommandAsync(message.Chat.Id, message.Text);
             else if (message.Text.Equals("Удалить все задачи"))
             {
                 Users User = Users.Find(x => x.IdUser == message.Chat.Id);
-                if (Users == null) SendMessage(message.Chat.Id, 4);
-                else if (User.Events.Count == 0) SendMessage(User.IdUser, 4);
+                if (User == null) await SendMessageAsync(message.Chat.Id, 4);
+                else if (User.Events.Count == 0) await SendMessageAsync(User.IdUser, 4);
                 else
                 {
                     User.Events = new List<Events>();
-                    SendMessage(User.IdUser, 6);
+                    DatabaseHelper.DeleteAllUserEvents(User.IdUser);
+                    await SendMessageAsync(User.IdUser, 6);
                 }
             }
             else
@@ -128,42 +201,80 @@ namespace TaskManagerTelegramBot_Pikulev
                     User = new Users(message.Chat.Id);
                     Users.Add(User);
                 }
+
                 string[] Info = message.Text.Split('\n');
                 if (Info.Length < 2)
                 {
-                    SendMessage(message.Chat.Id, 2);
+                    await SendMessageAsync(message.Chat.Id, 2);
                     return;
                 }
 
-                DateTime Time;
-                if (CheckFormatDateTime(Info[0], out Time) == false)
+                string firstLine = Info[0];
+
+                if (firstLine.StartsWith("* "))
                 {
-                    SendMessage(message.Chat.Id, 2);
-                    return;
-                }
-                if (Time < DateTime.Now) SendMessage(message.Chat.Id, 3);
+                    if (CheckRecurringTaskFormat(firstLine, out TimeSpan time, out List<DayOfWeek> days))
+                    {
+                        string eventMessage = message.Text.Replace(firstLine + "\n", "");
 
-                User.Events.Add(new Events(
-                    Time,
-                    message.Text.Replace(Time.ToString("HH:mm dd.MM.yyyy") + "\n", "")));
+                        Events recurringEvent = new Events(
+                            DateTime.Today.Add(time),
+                            eventMessage,
+                            isRecurring: true,
+                            days: days
+                        );
+
+                        User.Events.Add(recurringEvent);
+                        DatabaseHelper.SaveEvent(message.Chat.Id, recurringEvent.Time, eventMessage);
+
+                        await TelegramBotClient.SendMessage(
+                            message.Chat.Id,
+                            $"✅ Создано повторяющееся событие:\n" +
+                            $"Каждый {GetDaysString(days)} в {time:hh\\:mm}\n" +
+                            $"Сообщение: {eventMessage}\n"
+                            );
+                    }
+                    else
+                    {
+                        await SendMessageAsync(message.Chat.Id, 2);
+                    }
+                }
+                else
+                {
+                    DateTime Time;
+                    if (CheckFormatDateTime(firstLine, out Time) == false)
+                    {
+                        await SendMessageAsync(message.Chat.Id, 2);
+                        return;
+                    }
+                    if (Time < DateTime.Now) await SendMessageAsync(message.Chat.Id, 3);
+
+                    string eventMessage = message.Text.Replace(Time.ToString("HH:mm dd.MM.yyyy") + "\n", "");
+
+                    Events regularEvent = new Events(Time, eventMessage);
+                    User.Events.Add(regularEvent);
+
+                    DatabaseHelper.SaveEvent(message.Chat.Id, Time, eventMessage);
+                }
             }
         }
-        private async Task HandleUpdateAsync(
-            ITelegramBotClient client,
-            Update update,
-            CancellationToken cancellationToken)
+
+        private async Task HandleUpdateAsync(ITelegramBotClient client, Update update, CancellationToken cancellationToken)
         {
             if (update.Type == UpdateType.Message)
-                GetMessages(update.Message);
+                await GetMessagesAsync(update.Message);
             else if (update.Type == UpdateType.CallbackQuery)
             {
                 CallbackQuery query = update.CallbackQuery;
                 Users User = Users.Find(x => x.IdUser == query.Message.Chat.Id);
                 Events Event = User.Events.Find(x => x.Message == query.Data);
                 User.Events.Remove(Event);
-                SendMessage(query.Message.Chat.Id, 5);
+                DatabaseHelper.DeleteEvent(query.Message.Chat.Id, query.Data);
+
+                await SendMessageAsync(query.Message.Chat.Id, 5);
             }
         }
+
         private async Task HandleErrorAsync(
             ITelegramBotClient client,
             Exception exception,
@@ -173,6 +284,7 @@ namespace TaskManagerTelegramBot_Pikulev
             Console.WriteLine("Ошибка: " + exception.Message);
             await Task.CompletedTask;
         }
+
         public async void Tick(object obj)
         {
             DateTime currentDate = DateTime.Now;
@@ -181,7 +293,7 @@ namespace TaskManagerTelegramBot_Pikulev
 
             foreach (Users User in Users)
             {
-                for (int i = User.Events.Count; i++)
+                for (int i = User.Events.Count - 1; i >= 0; i--)
                 {
                     Events currentEvent = User.Events[i];
 
@@ -207,8 +319,27 @@ namespace TaskManagerTelegramBot_Pikulev
                 }
             }
         }
+
+        private DateTime GetNextOccurrence(Events recurringEvent, DateTime currentDate)
+        {
+            var timeOfDay = recurringEvent.Time.TimeOfDay;
+            var nextDate = currentDate.AddDays(1);
+
+            for (int i = 0; i < 7; i++)
+            {
+                var checkDate = nextDate.AddDays(i);
+                if (recurringEvent.RecurringDays.Contains(checkDate.DayOfWeek))
+                {
+                    return checkDate.Date.Add(timeOfDay);
+                }
+            }
+
+            return currentDate.Date.AddDays(7).Add(timeOfDay);
+        }
+
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            DatabaseHelper.InitializeDatabase();
 
             TelegramBotClient = new TelegramBotClient(Token);
             TelegramBotClient.StartReceiving(
@@ -221,20 +352,12 @@ namespace TaskManagerTelegramBot_Pikulev
 
             await Task.CompletedTask;
         }
+
         private readonly ILogger<Worker> _logger;
 
         public Worker(ILogger<Worker> logger)
         {
             _logger = logger;
-        }
-
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-        {
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                _logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
-                await Task.Delay(1000, stoppingToken);
-            }
         }
     }
 }
